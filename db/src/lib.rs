@@ -5,7 +5,7 @@ extern crate diesel;
 #[macro_use]
 extern crate lazy_static;
 
-use cid::Cid;
+use cid::{Cid, Codec};
 use diesel::r2d2::{ConnectionManager, Pool, PoolError, PooledConnection};
 use diesel::{Connection, PgConnection};
 use failure::ResultExt;
@@ -63,4 +63,9 @@ pub fn canonicalize_cid_from_str_to_base32_cidv1(cid: &str) -> Result<String> {
 pub fn canonicalize_cid_to_base32_cidv1(c: &Cid) -> String {
     let v1_cid = canonicalize_cid_to_cidv1(c);
     multibase::encode(multibase::Base::Base32Lower, v1_cid.to_bytes())
+}
+
+pub fn canonicalize_cid_from_str_to_cidv1_and_codec(cid: &str) -> Result<(Cid,Codec)> {
+    let provided_cid = Cid::try_from(cid).context("invalid CID")?;
+    Ok((canonicalize_cid_to_cidv1(&provided_cid),provided_cid.codec()))
 }

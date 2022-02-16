@@ -1,7 +1,8 @@
 use crate::model::*;
+use crate::schema::bitswap_messages::dsl::bitswap_messages;
 use diesel::prelude::*;
 use diesel::PgConnection;
-use failure::ResultExt;
+use failure::{bail, ensure, ResultExt};
 use ipfs_api::response;
 use ipfs_resolver_common::Result;
 
@@ -94,90 +95,7 @@ pub fn block_exists(conn: &PgConnection, cid: &str) -> Result<BlockStatus> {
     }
 }
 
-/*
-// These functions were only required during a DB migration to translate base32 CIDs into BYTEA
-// versions.
-
-pub fn get_blocks_without_cidv1(
-    conn: &PgConnection,
-    count: i64,
-    offset: i64,
-) -> Result<Vec<Block>> {
-    use crate::schema::blocks::dsl::*;
-
-    let b: Vec<Block> = blocks
-        .filter(cidv1.is_null())
-        .limit(count)
-        .offset(offset)
-        .get_results(conn)?;
-
-    Ok(b)
-}
-
-pub fn update_blocks_with_cidv1(conn: &PgConnection, bs: Vec<Block>) -> Result<()> {
-    use crate::schema::blocks::dsl::*;
-
-    conn.transaction(|| {
-        for b in bs.iter() {
-            let res = diesel::update(b)
-                .set(cidv1.eq(b.cidv1.clone()))
-                .execute(conn)
-                .context(format!("unable to update block {}", b.id))?;
-            if res != 1 {
-                return Err(err_msg(format!(
-                    "update of block {} affected {} rows",
-                    b.id, res
-                )));
-            }
-        }
-
-        Ok(())
-    })
-    .context("unable to perform transaction")?;
-
-    Ok(())
-}
-
-pub fn get_unixfs_links_without_cidv1(conn: &PgConnection, count: i64) -> Result<Vec<UnixFSLink>> {
-    use crate::schema::unixfs_links::dsl::*;
-
-    let l: Vec<UnixFSLink> = unixfs_links
-        .filter(referenced_cidv1.is_null())
-        .limit(count)
-        .get_results(conn)?;
-
-    Ok(l)
-}
-
-pub fn update_unixfs_links_with_cidv1(conn: &PgConnection, ls: Vec<UnixFSLink>) -> Result<()> {
-    use crate::schema::unixfs_links::dsl::*;
-
-    conn.transaction(|| {
-        for l in ls.iter() {
-            let res = diesel::update(l)
-                .set(referenced_cidv1.eq(l.referenced_cidv1.clone()))
-                .execute(conn)
-                .context(format!(
-                    "unable to update unixfs link for block {} with base32_cidv1 {}",
-                    l.parent_block_id, l.referenced_base32_cidv1
-                ))?;
-            if res != 1 {
-                return Err(err_msg(format!(
-                    "update of unixfs link for block {} with base32_cidv1 {} affected {} rows",
-                    l.parent_block_id, l.referenced_base32_cidv1, res
-                )));
-            }
-        }
-
-        Ok(())
-    })
-    .context("unable to perform transaction")?;
-
-    Ok(())
-}
-*/
-
-pub fn get_block(conn: &PgConnection, block_id: i32) -> Result<Block> {
+pub fn get_block(conn: &PgConnection, block_id: i64) -> Result<Block> {
     use crate::schema::blocks::dsl::*;
 
     let b = blocks.find(block_id).get_result(conn)?;
@@ -193,7 +111,7 @@ pub fn find_block_by_cid(conn: &PgConnection, cid: &Vec<u8>) -> Result<Option<Bl
     Ok(b)
 }
 
-pub fn get_unixfs_links_for_block(conn: &PgConnection, block_id: i32) -> Result<Vec<UnixFSLink>> {
+pub fn get_unixfs_links_for_block(conn: &PgConnection, block_id: i64) -> Result<Vec<UnixFSLink>> {
     use crate::schema::unixfs_links::dsl::*;
 
     let links = unixfs_links
@@ -215,7 +133,7 @@ pub fn find_unixfs_links_by_cid(conn: &PgConnection, cid: &Vec<u8>) -> Result<Ve
 
 pub fn get_successful_resolves_for_block(
     conn: &PgConnection,
-    p_block_id: i32,
+    p_block_id: i64,
 ) -> Result<Vec<SuccessfulResolve>> {
     use crate::schema::successful_resolves::dsl::*;
 
@@ -341,7 +259,7 @@ pub fn insert_failed_block_into_db(
     cid_string: &str,
     codec_id: i32,
     err: &BlockError,
-    ts: chrono::NaiveDateTime,
+    ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<Block> {
     let c = crate::canonicalize_cid_from_str_to_cidv1(&cid_string)
         .context("unable to canonicalize CID")?;
@@ -359,7 +277,7 @@ pub fn insert_failed_resolve_into_db(
     conn: &PgConnection,
     block: &Block,
     err: &BlockError,
-    ts: chrono::NaiveDateTime,
+    ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     create_failed_resolve(conn, &block.id, &err.id, &ts).context("unable to insert")?;
 
@@ -372,7 +290,7 @@ pub fn insert_successful_block_into_db(
     codec_id: i32,
     block_stat: response::BlockStatResponse,
     first_bytes: Vec<u8>,
-    ts: chrono::NaiveDateTime,
+    ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<Block> {
     let c = crate::canonicalize_cid_from_str_to_cidv1(&cid_string)
         .context("unable to canonicalize CID")?;
@@ -394,7 +312,7 @@ pub fn insert_first_successful_resolve_into_db(
     block: &Block,
     block_stat: response::BlockStatResponse,
     first_bytes: Vec<u8>,
-    ts: chrono::NaiveDateTime,
+    ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     create_block_stat(conn, &block.id, &(block_stat.size as i32), &first_bytes)
         .context("unable to insert block stat")?;
@@ -408,7 +326,7 @@ pub fn insert_first_successful_resolve_into_db(
 pub fn insert_additional_successful_resolve_into_db(
     conn: &PgConnection,
     block: &Block,
-    ts: chrono::NaiveDateTime,
+    ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     create_successful_resolve(conn, &block.id, &ts)
         .context("unable to insert successful resolve")?;
@@ -439,12 +357,16 @@ pub fn insert_unixfs_block(
 
 fn create_block<'a>(conn: &PgConnection, cidv1: &'a Vec<u8>, codec_id: &'a i32) -> Result<Block> {
     use crate::schema::blocks;
+    use diesel::pg::upsert::excluded;
 
     let new_block = NewBlock { cidv1, codec_id };
 
     let inserted_block = diesel::insert_into(blocks::table)
         .values(&new_block)
-        .on_conflict_do_nothing()
+        .on_conflict(blocks::cidv1)
+        .do_update()
+        .set(blocks::cidv1.eq(excluded(blocks::cidv1)))
+        //.on_conflict_do_nothing()
         .get_result(conn)
         .context("unable to insert")?;
 
@@ -453,7 +375,7 @@ fn create_block<'a>(conn: &PgConnection, cidv1: &'a Vec<u8>, codec_id: &'a i32) 
 
 fn create_block_stat<'a>(
     conn: &PgConnection,
-    block_id: &'a i32,
+    block_id: &'a i64,
     block_size: &'a i32,
     first_bytes: &'a Vec<u8>,
 ) -> Result<BlockStat> {
@@ -476,9 +398,9 @@ fn create_block_stat<'a>(
 
 fn create_failed_resolve<'a>(
     conn: &PgConnection,
-    block_id: &'a i32,
+    block_id: &'a i64,
     error_id: &'a i32,
-    ts: &'a chrono::NaiveDateTime,
+    ts: &'a chrono::DateTime<chrono::Utc>,
 ) -> Result<FailedResolve> {
     use crate::schema::failed_resolves;
 
@@ -498,8 +420,8 @@ fn create_failed_resolve<'a>(
 
 fn create_successful_resolve<'a>(
     conn: &PgConnection,
-    block_id: &'a i32,
-    ts: &'a chrono::NaiveDateTime,
+    block_id: &'a i64,
+    ts: &'a chrono::DateTime<chrono::Utc>,
 ) -> Result<SuccessfulResolve> {
     use crate::schema::successful_resolves;
 
@@ -515,7 +437,7 @@ fn create_successful_resolve<'a>(
 
 fn create_unixfs_block<'a>(
     conn: &PgConnection,
-    block_id: &'a i32,
+    block_id: &'a i64,
     unixfs_type_id: &'a i32,
     size: &'a i64,
     cumulative_size: &'a i64,
@@ -544,7 +466,7 @@ fn create_unixfs_block<'a>(
 
 fn create_unixfs_link<'a>(
     conn: &PgConnection,
-    parent_block_id: &'a i32,
+    parent_block_id: &'a i64,
     referenced_cidv1: &'a Vec<u8>,
     name: &'a str,
     size: &'a i64,
@@ -569,7 +491,7 @@ fn create_unixfs_link<'a>(
 
 fn create_unixfs_file_heuristics<'a>(
     conn: &PgConnection,
-    block_id: &'a i32,
+    block_id: &'a i64,
     tree_mime_mime_type: Option<&'a str>,
     chardet_encoding: Option<&'a str>,
     chardet_language: Option<&'a str>,
@@ -600,4 +522,199 @@ fn create_unixfs_file_heuristics<'a>(
         .context("unable to insert")?;
 
     Ok(inserted_heuristics)
+}
+
+pub fn insert_bitswap_message(
+    conn: &PgConnection,
+    monitor_id: i32,
+    msg: &ipfs_resolver_common::wantlist::JSONMessage,
+) -> Result<BitswapMessage> {
+    // Insert peer if not exists
+    let inserted_peer: Peer = {
+        use crate::schema::peers;
+        use crate::schema::peers::peer_id;
+        use diesel::pg::upsert::excluded;
+
+        let new_peer = NewPeer { peer_id: &msg.peer };
+
+        diesel::insert_into(peers::table)
+            .values(&new_peer)
+            .on_conflict(crate::schema::peers::peer_id)
+            .do_update()
+            .set(peer_id.eq(excluded(peer_id)))
+            //.on_conflict_do_nothing()
+            .get_result(conn)
+            .context("unable to insert peer")?
+    };
+
+    // Insert message
+    let inserted_msg: BitswapMessage = {
+        use crate::schema::bitswap_messages;
+
+        let new_msg = NewBitswapMessage {
+            peer_id: &inserted_peer.id,
+            monitor_id: &monitor_id,
+            timestamp: &msg.timestamp,
+        };
+
+        diesel::insert_into(bitswap_messages::table)
+            .values(&new_msg)
+            .get_result(conn)
+            .context("unable to insert bitswap message")?
+    };
+
+    // Insert addresses if not exist, link to message
+    {
+        use crate::schema::bitswap_messages_underlay_addresses;
+        use crate::schema::underlay_addresses;
+        use diesel::pg::upsert::excluded;
+
+        if let Some(addr) = &msg.address {
+            let multiaddr = format!("{}", addr);
+            let new_addr = NewUnderlayAddress {
+                multiaddress: &multiaddr,
+            };
+
+            let inserted_addr: UnderlayAddress = diesel::insert_into(underlay_addresses::table)
+                .values(&new_addr)
+                .on_conflict(underlay_addresses::multiaddress)
+                .do_update()
+                .set(underlay_addresses::multiaddress.eq(excluded(underlay_addresses::multiaddress)))
+                .get_result(conn)
+                .context("unable to insert underlay address")?;
+
+            let new_mapping = NewBitswapMessageUnderlayAddress {
+                message_id: &inserted_msg.id,
+                address_id: &inserted_addr.id,
+            };
+
+            let num_rows = diesel::insert_into(bitswap_messages_underlay_addresses::table)
+                .values(&new_mapping)
+                .on_conflict_do_nothing()
+                .execute(conn)
+                .context("unable to insert underlay to bitswap message mapping")?;
+
+            ensure!(
+                num_rows == 1,
+                "expected to insert one row, inserted {} instead",
+                num_rows
+            )
+        }
+    }
+
+    // Insert entries
+    {
+        use crate::schema::bitswap_wantlist_entries;
+        use crate::schema::blocks;
+
+        if let Some(entries) = &msg.received_entries {
+            //let mut entries_to_insert = Vec::new();
+            for e in entries {
+                // Insert block if not exists
+                let (cidv1, codec) =
+                    crate::canonicalize_cid_from_str_to_cidv1_and_codec(&e.cid.path)
+                        .context("unable to parse entry CID")?;
+
+                // Insert codec if not exists...
+                let codec_id = match codec {
+                    cid::Codec::Raw => CODEC_RAW.id,
+                    cid::Codec::DagProtobuf => CODEC_DAG_PB.id,
+                    cid::Codec::DagCBOR => CODEC_DAG_CBOR.id,
+                    cid::Codec::GitRaw => CODEC_GIT_RAW.id,
+                    cid::Codec::EthereumBlock => CODEC_ETH_BLOCK.id,
+                    cid::Codec::EthereumBlockList => CODEC_ETH_BLOCK_LIST.id,
+                    cid::Codec::EthereumTxTrie => CODEC_ETH_TX_TRIE.id,
+                    cid::Codec::EthereumTx => CODEC_ETH_TX.id,
+                    cid::Codec::EthereumTxReceiptTrie => CODEC_ETH_TX_RECEIPT_TRIE.id,
+                    cid::Codec::EthereumTxReceipt => CODEC_ETH_TX_RECEIPT.id,
+                    cid::Codec::EthereumStateTrie => CODEC_ETH_STATE_TRIE.id,
+                    cid::Codec::EthereumAccountSnapshot => CODEC_ETH_ACCOUNT_SNAPSHOT.id,
+                    cid::Codec::EthereumStorageTrie => CODEC_ETH_STORAGE_TRIE.id,
+                    cid::Codec::BitcoinBlock => CODEC_BITCOIN_BLOCK.id,
+                    cid::Codec::BitcoinTx => CODEC_BITCOIN_TX.id,
+                    cid::Codec::ZcashBlock => CODEC_ZCASH_BLOCK.id,
+                    cid::Codec::ZcashTx => CODEC_ZCASH_TX.id,
+                    cid::Codec::DagJSON => CODEC_DAG_JSON.id,
+                    _ => {
+                        // TODO do this at some point
+                        bail!("unimplemented codec with ID {:?}", codec)
+                        /*
+                        use crate::schema::codecs;
+                        use multiformats::multicodec::Multicodec;
+                        use std::convert::TryFrom;
+
+                        let mc = Multicodec::from_code(codec as u128).unwrap();
+                        let codec_name = format!("{}", mc);
+                        ensure!(
+                            codec_name != "@#bad-code#@",
+                            "unknown multicodec, cannot insert"
+                        );
+                        let codec_id = i32::try_from(mc.code())
+                            .context("multicodec is larger than 32 bits, can't insert for now")?;
+
+                        let new_codec = NewCodec {
+                            id: &codec_id,
+                            name: codec_name.as_str(),
+                        };
+
+                        diesel::insert_into(codecs::table)
+                            .values(&new_codec)
+                            .on_conflict_do_nothing()
+                            .execute(conn)
+                            .context("unable to insert (potentially) new codec")?;
+
+                        codec_id
+                         */
+                    }
+                };
+
+                let block = create_block(conn, &cidv1.to_bytes(), &codec_id)
+                    .context("unable to insert block")?;
+
+                // Insert wantlist entry
+                let entry_type_id = match e.cancel {
+                    true => BITSWAP_WANTLIST_ENTRY_TYPE_CANCEL.id,
+                    false => match e.want_type {
+                        0 => match e.send_dont_have {
+                            true => BITSWAP_WANTLIST_ENTRY_TYPE_WANT_BLOCK_SEND_DONT_HAVE.id,
+                            false => BITSWAP_WANTLIST_ENTRY_TYPE_WANT_BLOCK.id,
+                        },
+                        1 => match e.send_dont_have {
+                            true => BITSWAP_WANTLIST_ENTRY_TYPE_WANT_HAVE_SEND_DONT_HAVE.id,
+                            false => BITSWAP_WANTLIST_ENTRY_TYPE_WANT_HAVE.id,
+                        },
+                        _ => bail!("unknown want_type {} in JSON message", e.want_type),
+                    },
+                };
+
+                let msg_id = inserted_msg.id;
+                let cid_id = block.id;
+                let priority = e.priority;
+
+                let new_entry = NewBitswapWantlistEntry {
+                    message_id: &msg_id,
+                    cid_id: &cid_id,
+                    entry_type_id: &entry_type_id,
+                    priority: &priority,
+                };
+
+                use crate::schema::bitswap_wantlist_entries;
+                diesel::insert_into(bitswap_wantlist_entries::table)
+                    .values(&new_entry)
+                    .execute(conn)
+                    .context("unable to insert bitswap message entries")?;
+
+                //entries_to_insert.push(new_entry);
+            }
+            /*
+                       use crate::schema::bitswap_wantlist_entries;
+                       diesel::insert_into(bitswap_wantlist_entries::table)
+                           .values(entries_to_insert)
+                           .execute(conn)
+                           .context("unable to insert bitswap message entries")?;
+            */
+        }
+    }
+
+    Ok(inserted_msg)
 }

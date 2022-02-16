@@ -1,0 +1,19 @@
+[package]
+name = "bitswap-to-db-test"
+version = "0.1.0"
+authors = ["Leo Balduf <leobalduf@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ipfs-resolver-common = {path="../common"}
+ipfs-resolver-db = {path = "../db"}
+failure = "0.1.7"
+log = "0.4.8"
+flexi_logger = "0.15.2"
+serde = "1.0.110"
+serde_json = "1.0.73"
+flate2 = "1.0.22"
+dotenv = "0.15.0"
+diesel = { version = "1.4.8", features = ["postgres","chrono"] }

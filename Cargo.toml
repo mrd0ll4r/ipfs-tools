@@ -12,4 +12,5 @@ members=[
 "cid-decode",
 "csv-to-graph",
 "unify-bitswap-traces",
+    "bitswap-db-test"
 ]
